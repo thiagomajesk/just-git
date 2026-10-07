@@ -35,6 +35,29 @@ const git = createGit({
 
 ## Repository access
 
+### Explicit partial downloads (Gitit fork)
+
+This fork supports `fetch --filter=blob:none` and `clone --filter=blob:none --no-checkout` (or `--bare`). A filtered fetch transfers commits and trees but omits blobs. The remote must advertise the `filter` capability; unsupported servers produce an error rather than a full-download fallback. The filter and promisor remote are persisted in repository configuration and reused by later fetches. `fetch --no-tags` and the remote's saved `tagOpt` suppress automatic tag downloads.
+
+Use `fetchObjects(repo, objectIds, { remote: "origin", batchSize: 128 })` from `just-git/repo` to hydrate selected missing blobs explicitly. Requests use the normal credentials, network policy, HTTP adapter, progress callback, and pre/post-fetch hooks. They do not update refs, `FETCH_HEAD`, or shallow boundaries. The server must allow requests for reachable object IDs. Existing objects are skipped, and requests are deduplicated and bounded into batches. Commit objects can bring their reachable graph; vault clients should request blob IDs discovered from the trees.
+
+Object reads and existence checks never download implicitly. This keeps push exclusion walks from hydrating unrelated files. Callers must hydrate needed blobs before reading them or invoking commands that need their contents. Use filtered fetch and the repo SDK; pull, full checkout, diff, merge, and general partial-clone maintenance are outside this scoped implementation. Pull, GC, and repack reject partial repositories before modifying them. The local/cross-VFS transport filters its outgoing pack but still reads source blobs during enumeration; the download and memory optimization targets Smart HTTP. There is no automatic conversion of existing caches or fallback transport.
+
+```ts
+import { fetchObjects, flattenTree, readCommit } from "just-git/repo";
+
+await git.exec("fetch --depth=1 --filter=blob:none --no-tags origin");
+const repo = await git.findRepo();
+if (repo) {
+  const entries = await flattenTree(repo, (await readCommit(repo, revision)).tree);
+  const selected = entries.filter(({ path }) => path.startsWith("My vault/"));
+  await fetchObjects(
+    repo,
+    selected.map(({ hash }) => hash),
+  );
+}
+```
+
 `git.findRepo()` returns a `GitContext` for the current working directory, the bridge between command execution via `exec` and programmatic access via the [repo module](REPO.md). Like `exec`, it uses the instance's default `fs` and `cwd`, with optional per-call overrides. The returned context carries all operator-level extensions (hooks, identity, credentials, config overrides) configured on the instance.
 
 ```ts
